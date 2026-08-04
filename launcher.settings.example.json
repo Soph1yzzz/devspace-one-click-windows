@@ -1,0 +1,6 @@
+{
+  "Port": 7676,
+  "StartupTimeoutSeconds": 30,
+  "HttpTimeoutSeconds": 20,
+  "BackupRetention": 10
+}
