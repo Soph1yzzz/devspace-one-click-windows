@@ -1,34 +1,36 @@
 # DevSpace One-Click for Windows
 
-Windows 上の [DevSpace](https://github.com/Waishnav/devspace) と Cloudflare Quick Tunnel を、ダブルクリック中心で運用するための非公式コンパニオンツールです。
+[日本語の簡易ガイド](README.ja.md)
 
-- PC 再起動後: `start-devspace.cmd` をダブルクリック
-- 接続先フォルダ変更: フォルダパスをコピーして `change-devspace-root.cmd` をダブルクリックし、貼り付け
-- 停止: `stop-devspace.cmd`
-- 状態確認: `status-devspace.cmd`
+An unofficial Windows companion for running [DevSpace](https://github.com/Waishnav/devspace) with a Cloudflare Quick Tunnel using mostly double-click operations.
 
-DevSpace サーバー、Quick Tunnel URL の取得、`publicBaseUrl` 更新、外部 OAuth メタデータ疎通確認、`allowedRoots` の安全な切替と失敗時ロールバックを自動化します。
+- After restarting Windows: double-click `start-devspace.cmd`
+- To switch repositories: copy a folder path, double-click `change-devspace-root.cmd`, and paste it
+- To stop the stack: double-click `stop-devspace.cmd`
+- To view the current status and MCP URL: double-click `status-devspace.cmd`
+
+The launcher automates the DevSpace server lifecycle, Cloudflare Quick Tunnel URL discovery, `publicBaseUrl` updates, external OAuth metadata health checks, safe `allowedRoots` switching, configuration backups, and rollback after failed root changes.
 
 > [!IMPORTANT]
-> このプロジェクトは DevSpace の公式プロジェクトではありません。DevSpace 本体を同梱せず、インストール済みの `@waishnav/devspace` を利用します。
+> This is not an official DevSpace project. It does not bundle DevSpace and uses the globally installed `@waishnav/devspace` package.
 
-## 何が楽になるか
+## Why this exists
 
-通常、Cloudflare Quick Tunnel は再起動時に URL が変わります。このツールは新しい URL を自動取得し、DevSpace の `publicBaseUrl` を更新し、外部から到達できることまで確認します。
+Cloudflare Quick Tunnel assigns a temporary URL that normally changes whenever the tunnel is recreated. This launcher automatically discovers the new URL, updates DevSpace's `publicBaseUrl`, starts DevSpace, and verifies that the public OAuth metadata endpoint is reachable.
 
-別のリポジトリを扱うときは、対象フォルダのパスを貼り付けるだけです。DevSpace と Tunnel が稼働中なら Tunnel を維持したまま DevSpace サーバーだけを再起動するため、MCP URL は変わりません。
+When you want DevSpace to access a different repository, paste the repository path into the root-switch command. If the existing tunnel is healthy, the launcher keeps it running and restarts only the DevSpace server, so the MCP URL remains unchanged.
 
-最後に ChatGPT 側へ URL を登録・更新する操作だけは人間に残しています。ChatGPT の頻繁な UI 変更へ依存せず、ローカルツールへ ChatGPT の認証情報を渡さないためです。
+The final step of registering or updating the URL in ChatGPT is intentionally left manual. This avoids depending on ChatGPT's frequently changing UI and avoids giving the launcher access to ChatGPT credentials or browser sessions.
 
-## 必要環境
+## Requirements
 
-- Windows 10 または Windows 11
-- Windows PowerShell 5.1 以上
-- Node.js と npm
+- Windows 10 or Windows 11
+- Windows PowerShell 5.1 or later
+- Node.js and npm
 - DevSpace (`@waishnav/devspace`)
 - Cloudflare `cloudflared`
 
-導入例:
+Example installation commands:
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
@@ -36,61 +38,61 @@ npm install -g @waishnav/devspace
 winget install --id Cloudflare.cloudflared
 ```
 
-DevSpace 本体の初期設定と ChatGPT への MCP 登録については、DevSpace 公式 README も確認してください。
+Refer to the official DevSpace README for the initial DevSpace setup and ChatGPT MCP registration flow.
 
-## 導入
+## Installation
 
-1. このリポジトリを任意のフォルダへ clone または ZIP 展開します。
-2. 必要に応じて `launcher.settings.example.json` を `launcher.settings.json` としてコピーし、設定を変更します。
-3. 最初に `change-devspace-root.cmd` を実行し、DevSpace に許可するフォルダを指定します。
-4. 表示された `https://...trycloudflare.com/mcp` を ChatGPT の MCP 設定へ貼り付けます。
+1. Clone this repository or download and extract its ZIP archive.
+2. Optionally copy `launcher.settings.example.json` to `launcher.settings.json` and adjust the defaults.
+3. Run `change-devspace-root.cmd` once and enter the folder DevSpace may access.
+4. Copy the displayed `https://...trycloudflare.com/mcp` URL into ChatGPT's MCP settings.
 
 ```powershell
 git clone https://github.com/Soph1yzzz/devspace-one-click-windows.git
 cd devspace-one-click-windows
 ```
 
-## 使い方
+## Usage
 
-### 起動・再起動後
+### Start after a reboot
 
-`start-devspace.cmd` をダブルクリックします。
+Double-click `start-devspace.cmd`.
 
-既に管理対象の DevSpace と Tunnel が動いている場合は、現在の URL を維持します。停止している場合は新しい Quick Tunnel を開始し、URL を表示します。
+If the managed DevSpace server and tunnel are already running, the launcher keeps the current URL. Otherwise, it creates a new Quick Tunnel, updates DevSpace, starts the server, performs a public connectivity check, and displays the MCP URL.
 
-### 接続先フォルダの変更
+### Switch the allowed repository
 
-1. エクスプローラーで対象フォルダのパスをコピーします。
-2. `change-devspace-root.cmd` をダブルクリックします。
-3. パスを貼り付けて Enter を押します。
+1. Copy the target folder path in File Explorer.
+2. Double-click `change-devspace-root.cmd`.
+3. Paste the path and press Enter.
 
-または PowerShell から直接指定できます。
+You can also provide the path directly from PowerShell:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\change-devspace-root.ps1 -Path "C:\path\to\repository"
 ```
 
-安全のため、ドライブルートとユーザーホーム全体は拒否されます。`allowedRoots` は指定フォルダ一つだけに置き換えられます。
+For safety, drive roots and the entire user home directory are rejected. `allowedRoots` is replaced with exactly one explicitly selected folder.
 
-### 状態確認
+### Check status
 
-`status-devspace.cmd`、または:
+Double-click `status-devspace.cmd`, or run:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\devspace-control.ps1 status
 ```
 
-### 停止
+### Stop DevSpace and the tunnel
 
-`stop-devspace.cmd`、または:
+Double-click `stop-devspace.cmd`, or run:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\devspace-control.ps1 stop
 ```
 
-## 設定
+## Configuration
 
-`launcher.settings.example.json` を `launcher.settings.json` としてコピーします。
+Copy `launcher.settings.example.json` to `launcher.settings.json` to override the defaults:
 
 ```json
 {
@@ -101,62 +103,64 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\devspace-control.ps1 s
 }
 ```
 
-| 設定 | 内容 |
+| Setting | Description |
 |---|---|
-| `Port` | DevSpace の待受ポート。DevSpace 側の設定と一致させます。 |
-| `StartupTimeoutSeconds` | DevSpace / Tunnel 起動待機時間。 |
-| `HttpTimeoutSeconds` | 公開 OAuth メタデータ確認のタイムアウト。 |
-| `BackupRetention` | ルート変更前の設定バックアップ保持数。 |
+| `Port` | DevSpace listening port. It must match the DevSpace configuration. |
+| `StartupTimeoutSeconds` | Maximum time to wait for DevSpace or the tunnel to start. |
+| `HttpTimeoutSeconds` | Timeout for the public OAuth metadata health check. |
+| `BackupRetention` | Number of pre-change DevSpace configuration backups to retain. |
 
-個人設定ファイル `launcher.settings.json` は Git 対象外です。
+The personal `launcher.settings.json` file is ignored by Git.
 
-## 安全設計
+## Safety and reliability design
 
-- `allowedRoots` を常に一つの明示フォルダへ限定
-- ドライブルートとユーザーホーム全体を拒否
-- DevSpace 設定を一時ファイル経由で原子的に更新
-- 変更前設定を `%USERPROFILE%\.devspace\backups` に保存
-- ルート変更または再起動失敗時に自動ロールバック
-- PID、プロセス名、コマンドラインを照合して管理対象だけを停止
-- DevSpace パッケージの `package.json` から CLI の場所を動的解決
-- Quick Tunnel URL の形式を検証
-- 外部公開 URL から OAuth メタデータが HTTP 200 を返すことを確認
-- ChatGPT UI のブラウザ自動操作や認証情報保存を行わない
+- Limits `allowedRoots` to one explicit folder
+- Rejects drive roots and the entire user home directory
+- Writes DevSpace configuration through an atomic temporary-file replacement
+- Stores pre-change backups under `%USERPROFILE%\.devspace\backups`
+- Attempts automatic rollback after a root-change or restart failure
+- Matches PID, process name, and command-line fragments before stopping managed processes
+- Resolves the DevSpace CLI dynamically from the installed package's `package.json`
+- Validates stored Cloudflare Quick Tunnel URLs
+- Confirms that DevSpace owns the configured listening port
+- Checks that the public OAuth metadata endpoint returns HTTP 200
+- Uses a mutex to prevent overlapping launcher operations
+- Does not automate the ChatGPT UI or store ChatGPT credentials
 
-## ログとバックアップ
+## Runtime files and backups
 
-実行時データは DevSpace の既存ディレクトリ内に保存されます。
+Runtime state is stored inside DevSpace's existing user directory:
 
 ```text
 %USERPROFILE%\.devspace\runtime\
 %USERPROFILE%\.devspace\backups\
 ```
 
-主なログ:
+Main log files:
 
 - `cloudflared.out.log`
 - `cloudflared.err.log`
 - `devspace.out.log`
 - `devspace.err.log`
 
-## 更新
+## Updating dependencies
 
-DevSpace 更新後も、固定された `dist/cli.js` を直接仮定せず、インストール済みパッケージの `package.json` にある `bin` 定義を読み取ります。
+The launcher does not assume a hard-coded internal path such as `dist/cli.js`. It reads the installed DevSpace package's `bin` declaration from `package.json`, which makes it more tolerant of future package-layout changes.
 
-更新例:
+Example update commands:
 
 ```powershell
 npm update -g @waishnav/devspace
 winget upgrade --id Cloudflare.cloudflared
 ```
 
-更新後は `tests\Test-Static.ps1` を実行してください。
+After updating, run the isolated checks:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Static.ps1
 ```
 
-## トラブルシューティング
+## Troubleshooting
 
 ### `cloudflared was not found`
 
@@ -170,41 +174,51 @@ winget install --id Cloudflare.cloudflared
 npm install -g @waishnav/devspace
 ```
 
-### ポートが使用中
+### The configured port is already in use
 
-表示された PID のプロセスを確認してください。別の DevSpace を手動起動している場合は停止します。
+Inspect the process ID shown in the error. If another DevSpace instance was started manually, stop it first.
 
 ```powershell
 Get-NetTCPConnection -LocalPort 7676 -State Listen
 ```
 
-### Quick Tunnel URL を取得できない
+### The Quick Tunnel URL could not be discovered
 
-`%USERPROFILE%\.devspace\runtime\cloudflared.err.log` を確認してください。Cloudflare 側の一時障害、ネットワーク制限、セキュリティソフトの遮断が考えられます。
+Check:
 
-### 公開疎通確認に失敗する
+```text
+%USERPROFILE%\.devspace\runtime\cloudflared.err.log
+```
 
-`devspace.err.log` と `cloudflared.err.log` を確認してください。Tunnel 作成直後の伝播が遅い環境では `HttpTimeoutSeconds` を増やせます。
+Possible causes include a temporary Cloudflare outage, network restrictions, or security software blocking `cloudflared`.
 
-### ルート変更に失敗した
+### The public connectivity check failed
 
-設定は可能な限り直前のバックアップへ戻されます。バックアップは `%USERPROFILE%\.devspace\backups` にあります。
+Inspect `devspace.err.log` and `cloudflared.err.log`. If tunnel propagation is slow on your network, increase `HttpTimeoutSeconds` in `launcher.settings.json`.
 
-## 既知の制約
+### A root change failed
 
-- Windows 専用です。
-- Cloudflare Quick Tunnel は一時 URL であり、稼働保証や固定 URL を提供しません。
-- PC 再起動や Tunnel 再作成後は ChatGPT 側の MCP URL を手動更新する必要があります。
-- ChatGPT の設定 UI は自動操作しません。
-- DevSpace や Cloudflare の将来の破壊的変更へ完全な互換性を保証するものではありません。
-- 実動テストでは現在利用中の DevSpace 接続を停止・再作成するため、作業中のセッションがある場合は静的テストだけを使用してください。
+The launcher attempts to restore the most recent pre-change configuration and restart the previous setup. Backups are stored under:
 
-## セキュリティ
+```text
+%USERPROFILE%\.devspace\backups
+```
 
-脆弱性を見つけた場合は、公開 Issue に秘密情報や再現用トークンを書かず、[SECURITY.md](SECURITY.md) の手順に従ってください。
+## Known limitations
 
-Quick Tunnel の URL は秘密鍵ではありませんが、不用意に公開しないでください。DevSpace の認証・認可設定と `allowedRoots` を最小権限に保ってください。
+- Windows only
+- Cloudflare Quick Tunnel provides a temporary URL and no fixed-URL or availability guarantee
+- The ChatGPT MCP URL must be updated manually after Windows restarts or the tunnel is recreated
+- The launcher deliberately does not automate ChatGPT's settings UI
+- Compatibility cannot be guaranteed against every future breaking change in DevSpace or Cloudflare Tunnel
+- A full live test stops and recreates the active DevSpace connection; use the static test while an important session is in progress
 
-## ライセンス
+## Security
 
-MIT License。詳細は [LICENSE](LICENSE) を参照してください。
+Follow [SECURITY.md](SECURITY.md) when reporting a vulnerability. Do not publish secrets, private repository names, personal filesystem paths, active access tokens, or active MCP URLs in a public issue.
+
+A Quick Tunnel URL is not a private key, but it should not be shared unnecessarily. Keep DevSpace authentication and authorization enabled, and keep `allowedRoots` restricted to the smallest required folder.
+
+## License
+
+MIT License. See [LICENSE](LICENSE).
