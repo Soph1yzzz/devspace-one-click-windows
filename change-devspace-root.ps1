@@ -7,11 +7,15 @@ Set-StrictMode -Version 2.0
 
 $Common = Join-Path $PSScriptRoot "devspace-common.ps1"
 $Controller = Join-Path $PSScriptRoot "devspace-control.ps1"
+$SessionGuardScript = Join-Path $PSScriptRoot "session-guard.mjs"
 if (-not (Test-Path -LiteralPath $Common -PathType Leaf)) {
     throw "Required helper was not found: $Common"
 }
 if (-not (Test-Path -LiteralPath $Controller -PathType Leaf)) {
     throw "Required controller was not found: $Controller"
+}
+if (-not (Test-Path -LiteralPath $SessionGuardScript -PathType Leaf)) {
+    throw "Required SessionGuard was not found: $SessionGuardScript"
 }
 . $Common
 
@@ -21,7 +25,8 @@ $Paths = Get-LauncherPaths
 $backupFile = $null
 $configChanged = $false
 $previousPublicUrl = $null
-$stackWasRunning = $false
+$shouldPreservePublicUrl = $false
+$serverWasRunning = $false
 $mutex = $null
 
 function Normalize-InputPath {
@@ -44,7 +49,16 @@ function Get-StackState {
     $tunnel = Get-ManagedProcess `
         -PidFile $Paths.TunnelPidFile `
         -AllowedNames @("cloudflared") `
-        -RequiredCommandLineFragments @("tunnel", "--url", "127.0.0.1:$($Settings.Port)")
+        -RequiredCommandLineFragments @("tunnel", "--url", "127.0.0.1:$($Settings.BridgePort)")
+    $guard = Get-ManagedProcess `
+        -PidFile $Paths.SessionGuardPidFile `
+        -AllowedNames @("node") `
+        -RequiredCommandLineFragments @(
+            $SessionGuardScript,
+            "--listen-port", [string]$Settings.BridgePort,
+            "--upstream-port", [string]$Settings.Port,
+            "--runtime-file", $Paths.SessionGuardRuntime
+        )
     $server = Get-ManagedProcess `
         -PidFile $Paths.DevSpacePidFile `
         -AllowedNames @("node") `
@@ -52,8 +66,9 @@ function Get-StackState {
 
     return [pscustomobject]@{
         Tunnel = $tunnel
+        SessionGuard = $guard
         Server = $server
-        FullyRunning = ($null -ne $tunnel -and $null -ne $server)
+        FullyRunning = ($null -ne $tunnel -and $null -ne $guard -and $null -ne $server)
     }
 }
 
@@ -93,10 +108,13 @@ try {
     $configJson = [System.IO.File]::ReadAllText($Paths.ConfigFile, [System.Text.Encoding]::UTF8)
     $config = $configJson | ConvertFrom-Json
     $state = Get-StackState
-    $stackWasRunning = $state.FullyRunning
+    $serverWasRunning = ($null -ne $state.Server)
 
-    if ($stackWasRunning) {
-        $previousPublicUrl = Get-ValidatedPublicUrl -Path $Paths.PublicUrlFile
+    if ($null -ne $state.Tunnel) {
+        try {
+            $previousPublicUrl = Get-ValidatedPublicUrl -Path $Paths.PublicUrlFile
+            $shouldPreservePublicUrl = $true
+        } catch { }
     } elseif (Test-Path -LiteralPath $Paths.PublicUrlFile -PathType Leaf) {
         try { $previousPublicUrl = Get-ValidatedPublicUrl -Path $Paths.PublicUrlFile } catch { }
     }
@@ -114,12 +132,20 @@ try {
     Write-JsonAtomically -Value $config -Destination $Paths.ConfigFile
     $configChanged = $true
 
-    if ($stackWasRunning) {
-        Write-Host "Restarting DevSpace while keeping the current tunnel URL..." -ForegroundColor Yellow
+    if ($null -ne $state.Tunnel -and $null -ne $state.SessionGuard) {
+        Write-Host "Restarting only DevSpace while keeping SessionGuard and the current tunnel URL..." -ForegroundColor Yellow
         & $Controller restart-server
+    } elseif ($null -ne $state.Tunnel) {
+        Write-Host "Repairing SessionGuard behind the existing tunnel while keeping its URL..." -ForegroundColor Yellow
+        & $Controller ensure
+        if ($LASTEXITCODE -eq 0 -and $serverWasRunning) {
+            # The old DevSpace process was already running before the config change,
+            # so restart it once to load the new allowedRoot.
+            & $Controller restart-server
+        }
     } else {
-        Write-Host "DevSpace is not fully running. Starting a new Quick Tunnel and server..." -ForegroundColor Yellow
-        & $Controller start
+        Write-Host "Repairing or starting the DevSpace stack for the new folder..." -ForegroundColor Yellow
+        & $Controller ensure
     }
     if ($LASTEXITCODE -ne 0) {
         throw "DevSpace could not be started with the new folder."
@@ -132,9 +158,9 @@ try {
     }
 
     $publicUrl = Get-ValidatedPublicUrl -Path $Paths.PublicUrlFile
-    if ($stackWasRunning -and $publicUrl -ne $previousPublicUrl) {
-        throw "The public URL changed unexpectedly during the server-only restart."
-    } elseif ((-not $stackWasRunning) -and $previousPublicUrl -and $publicUrl -ne $previousPublicUrl) {
+    if ($shouldPreservePublicUrl -and $publicUrl -ne $previousPublicUrl) {
+        throw "The public URL changed unexpectedly even though the managed tunnel was preserved."
+    } elseif ($previousPublicUrl -and $publicUrl -ne $previousPublicUrl) {
         Write-Host "The MCP URL changed because the Cloudflare Quick Tunnel was restarted." -ForegroundColor Yellow
     }
 
@@ -157,10 +183,13 @@ try {
         Write-Host "Restoring the previous DevSpace config..." -ForegroundColor Yellow
         try {
             Copy-Item -LiteralPath $backupFile -Destination $Paths.ConfigFile -Force
-            if ($stackWasRunning) {
+            & $Controller ensure
+            if ($LASTEXITCODE -eq 0) {
+                # Ensure the restored config is loaded even when DevSpace itself never stopped.
                 & $Controller restart-server
-            } else {
-                & $Controller start
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "The restored configuration could not be reactivated."
             }
             Write-Host "Previous config was restored and restarted." -ForegroundColor Yellow
             if (Test-Path -LiteralPath $Paths.PublicUrlFile -PathType Leaf) {

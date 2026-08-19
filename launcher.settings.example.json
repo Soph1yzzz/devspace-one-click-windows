@@ -1,5 +1,6 @@
 {
   "Port": 7676,
+  "BridgePort": 7677,
   "StartupTimeoutSeconds": 30,
   "HttpTimeoutSeconds": 20,
   "BackupRetention": 10

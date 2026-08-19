@@ -1,224 +1,262 @@
 # DevSpace One-Click for Windows
 
-[日本語の簡易ガイド](README.ja.md)
+A small, unofficial Windows launcher for running [DevSpace](https://github.com/Waishnav/devspace) behind a Cloudflare Quick Tunnel with a nearly double-click-only workflow.
 
-An unofficial Windows companion for running [DevSpace](https://github.com/Waishnav/devspace) with a Cloudflare Quick Tunnel using mostly double-click operations.
+**Current release: v1.1.0 (2026-08-19)** — SessionGuard, minimal-repair startup, stronger diagnostics, and safer long-running ChatGPT session recovery. See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
-- After restarting Windows: double-click `start-devspace.cmd`
-- To switch repositories: copy a folder path, double-click `change-devspace-root.cmd`, and paste it
-- To stop the stack: double-click `stop-devspace.cmd`
-- To view the current status and MCP URL: double-click `status-devspace.cmd`
+The launcher keeps DevSpace restricted to one approved local folder, discovers the installed DevSpace CLI dynamically, manages only processes it can positively identify, and now includes **SessionGuard** to make long-running ChatGPT conversations much more resilient to DevSpace MCP session loss.
 
-The launcher automates the DevSpace server lifecycle, Cloudflare Quick Tunnel URL discovery, `publicBaseUrl` updates, external OAuth metadata health checks, safe `allowedRoots` switching, configuration backups, and rollback after failed root changes.
+> This project is not affiliated with DevSpace, Cloudflare, or OpenAI.
 
-> [!IMPORTANT]
-> This is not an official DevSpace project. It does not bundle DevSpace and uses the globally installed `@waishnav/devspace` package.
+## What SessionGuard fixes
 
-## Why this exists
+DevSpace uses stateful MCP Streamable HTTP sessions. A ChatGPT conversation can keep an `Mcp-Session-Id` after the corresponding server-side transport has disappeared, for example after a DevSpace process restart or session cleanup. DevSpace correctly answers an unknown session with HTTP 404. Some clients can remain stuck sending the stale session instead of transparently starting a new one.
 
-Cloudflare Quick Tunnel assigns a temporary URL that normally changes whenever the tunnel is recreated. This launcher automatically discovers the new URL, updates DevSpace's `publicBaseUrl`, starts DevSpace, and verifies that the public OAuth metadata endpoint is reachable.
+SessionGuard sits between Cloudflare and DevSpace:
 
-When you want DevSpace to access a different repository, paste the repository path into the root-switch command. If the existing tunnel is healthy, the launcher keeps it running and restarts only the DevSpace server, so the MCP URL remains unchanged.
-
-The final step of registering or updating the URL in ChatGPT is intentionally left manual. This avoids depending on ChatGPT's frequently changing UI and avoids giving the launcher access to ChatGPT credentials or browser sessions.
-
-## Requirements
-
-- Windows 10 or Windows 11
-- Windows PowerShell 5.1 or later
-- Node.js and npm
-- DevSpace (`@waishnav/devspace`)
-- Cloudflare `cloudflared`
-
-Example installation commands:
-
-```powershell
-winget install OpenJS.NodeJS.LTS
-npm install -g @waishnav/devspace
-winget install --id Cloudflare.cloudflared
+```text
+ChatGPT
+   |
+   v
+Cloudflare Quick Tunnel
+   |
+   v
+SessionGuard 127.0.0.1:7677
+   |
+   v
+DevSpace     127.0.0.1:7676
 ```
 
-Refer to the official DevSpace README for the initial DevSpace setup and ChatGPT MCP registration flow.
+For a session previously initialized through SessionGuard, a session-bound `/mcp` request that receives a downstream HTTP 404 is handled conservatively:
 
-## Installation
+1. SessionGuard performs one fresh MCP `initialize` against DevSpace.
+2. It sends `notifications/initialized` once.
+3. It updates the old external-session -> new downstream-session mapping atomically.
+4. It retries the original request **once**.
+5. ChatGPT continues seeing the same external `Mcp-Session-Id`.
 
-1. Clone this repository or download and extract its ZIP archive.
-2. Optionally copy `launcher.settings.example.json` to `launcher.settings.json` and adjust the defaults.
-3. Run `change-devspace-root.cmd` once and enter the folder DevSpace may access.
-4. Copy the displayed `https://...trycloudflare.com/mcp` URL into ChatGPT's MCP settings.
+There is no retry loop. HTTP 401, 403, generic 4xx/5xx responses, timeouts, connection resets, and other ambiguous failures are **not** replayed automatically.
 
-```powershell
-git clone https://github.com/Soph1yzzz/devspace-one-click-windows.git
-cd devspace-one-click-windows
+This follows the MCP session model: an unknown/expired session is represented by HTTP 404 and signals that a new session is required. See the upstream MCP TypeScript SDK discussion in issue `modelcontextprotocol/typescript-sdk#1708` and the SDK session/state documentation.
+
+## What SessionGuard cannot fix
+
+A different failure can happen entirely inside the ChatGPT connector/tool binding layer: discovery may still list the DevSpace tools while a direct tool invocation fails before any HTTP request reaches this machine.
+
+A local reverse proxy cannot repair a request that was never sent. SessionGuard therefore adds **traffic observability** so the two failure classes can be distinguished instead of guessed at.
+
+`status-devspace.cmd` now shows:
+
+```text
+cloudflared:  running (...)
+SessionGuard: running (...)
+DevSpace:     running (...)
+MCP URL:      https://...trycloudflare.com/mcp
+Last MCP seen: ...
+Recovery:      2 succeeded, 0 failed
 ```
 
-## Usage
+If ChatGPT reports a DevSpace invocation failure while all three processes are healthy and `Last MCP seen` does not advance, that is evidence that the failure occurred upstream of SessionGuard.
 
-### Start after a reboot
-
-Double-click `start-devspace.cmd`.
-
-If the managed DevSpace server and tunnel are already running, the launcher keeps the current URL. Otherwise, it creates a new Quick Tunnel, updates DevSpace, starts the server, performs a public connectivity check, and displays the MCP URL.
-
-### Switch the allowed repository
-
-1. Copy the target folder path in File Explorer.
-2. Double-click `change-devspace-root.cmd`.
-3. Paste the path and press Enter.
-
-You can also provide the path directly from PowerShell:
+For deeper local diagnostics, without adding another normal-user CMD entry point:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\change-devspace-root.ps1 -Path "C:\path\to\repository"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\devspace-control.ps1 diagnose
 ```
 
-For safety, drive roots and the entire user home directory are rejected. `allowedRoots` is replaced with exactly one explicitly selected folder.
+The diagnostic command reports process/listener state, safe SessionGuard counters, local metadata through SessionGuard, and public metadata through the tunnel. It does not print tokens or full MCP session IDs.
 
-### Check status
+## Normal usage
 
-Double-click `status-devspace.cmd`, or run:
+### Start / repair
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\devspace-control.ps1 status
+Double-click:
+
+```text
+start-devspace.cmd
 ```
 
-### Stop DevSpace and the tunnel
+That remains the normal entry point.
 
-Double-click `stop-devspace.cmd`, or run:
+The launcher now repairs the smallest missing layer whenever it safely can:
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\devspace-control.ps1 stop
+- Tunnel + SessionGuard alive, DevSpace stopped -> restart only DevSpace and preserve the public URL.
+- Tunnel + DevSpace alive, SessionGuard stopped -> restart only SessionGuard and preserve the public URL.
+- All three alive -> keep everything as-is and validate the endpoint.
+- Tunnel stopped -> a new Quick Tunnel URL is unavoidable; SessionGuard is kept alive when possible so its mappings survive.
+
+This reduces avoidable public-endpoint churn, which is especially important for long-running ChatGPT conversations.
+
+### Change the allowed folder
+
+Double-click:
+
+```text
+change-devspace-root.cmd
 ```
+
+When the full stack is healthy, changing the root updates the DevSpace configuration atomically and restarts **only DevSpace**. SessionGuard and the existing Quick Tunnel stay alive, so the public MCP URL does not change.
+
+### Status
+
+Double-click:
+
+```text
+status-devspace.cmd
+```
+
+### Stop
+
+Double-click:
+
+```text
+stop-devspace.cmd
+```
+
+Public ingress is stopped first, then SessionGuard, then DevSpace.
+
+## First upgrade from the pre-SessionGuard launcher
+
+Older releases pointed Cloudflare directly at DevSpace on port 7676. SessionGuard uses a separate bridge port, so the launcher explicitly recognizes the old managed tunnel instead of leaking or double-starting `cloudflared`.
+
+The **first** start after upgrading performs a one-time migration:
+
+```text
+Cloudflare -> DevSpace:7676
+```
+
+becomes:
+
+```text
+Cloudflare -> SessionGuard:7677 -> DevSpace:7676
+```
+
+Because a Cloudflare Quick Tunnel URL is tied to the tunnel process, this one-time migration creates a new temporary URL. Update the ChatGPT MCP connection to that new URL once. After migration, routine DevSpace restarts and root changes preserve the tunnel URL whenever the tunnel process remains alive.
+
+If the earlier SessionGuard V1 trial is already running behind an existing bridge tunnel, the launcher recognizes that process separately and replaces only the guard with V2, preserving the running tunnel URL.
+
+A Quick Tunnel process restart can still change the public URL by design. SessionGuard cannot make a temporary Cloudflare hostname permanent.
 
 ## Configuration
 
-Copy `launcher.settings.example.json` to `launcher.settings.json` to override the defaults:
+Optional launcher overrides belong in `launcher.settings.json` beside the scripts. Start from `launcher.settings.example.json`:
 
 ```json
 {
   "Port": 7676,
+  "BridgePort": 7677,
   "StartupTimeoutSeconds": 30,
   "HttpTimeoutSeconds": 20,
   "BackupRetention": 10
 }
 ```
 
-| Setting | Description |
-|---|---|
-| `Port` | DevSpace listening port. It must match the DevSpace configuration. |
-| `StartupTimeoutSeconds` | Maximum time to wait for DevSpace or the tunnel to start. |
-| `HttpTimeoutSeconds` | Timeout for the public OAuth metadata health check. |
-| `BackupRetention` | Number of pre-change DevSpace configuration backups to retain. |
+`Port` is the DevSpace listener. `BridgePort` is the local SessionGuard listener and must be different.
 
-The personal `launcher.settings.json` file is ignored by Git.
+## Runtime files
 
-## Safety and reliability design
-
-- Limits `allowedRoots` to one explicit folder
-- Rejects drive roots and the entire user home directory
-- Writes DevSpace configuration through an atomic temporary-file replacement
-- Stores pre-change backups under `%USERPROFILE%\.devspace\backups`
-- Attempts automatic rollback after a root-change or restart failure
-- Matches PID, process name, and command-line fragments before stopping managed processes
-- Resolves the DevSpace CLI dynamically from the installed package's `package.json`
-- Validates stored Cloudflare Quick Tunnel URLs
-- Confirms that DevSpace owns the configured listening port
-- Checks that the public OAuth metadata endpoint returns HTTP 200
-- Uses a mutex to prevent overlapping launcher operations
-- Does not automate the ChatGPT UI or store ChatGPT credentials
-
-## Runtime files and backups
-
-Runtime state is stored inside DevSpace's existing user directory:
+Launcher runtime files are stored under:
 
 ```text
-%USERPROFILE%\.devspace\runtime\
-%USERPROFILE%\.devspace\backups\
+%USERPROFILE%\.devspace\runtime
 ```
 
-Main log files:
+Important files include:
 
-- `cloudflared.out.log`
-- `cloudflared.err.log`
-- `devspace.out.log`
-- `devspace.err.log`
+- `cloudflared.pid`
+- `session-guard.pid`
+- `devspace.pid`
+- `public-url.txt`
+- `session-guard-state.json` - recovery mapping and sanitized initialize template
+- `session-guard-runtime.json` - safe diagnostic counters/timestamps
+- process stdout/stderr logs
 
-## Updating dependencies
+### Recovery state
 
-The launcher does not assume a hard-coded internal path such as `dist/cli.js`. It reads the installed DevSpace package's `bin` declaration from `package.json`, which makes it more tolerant of future package-layout changes.
+`session-guard-state.json` stores only what is needed to rebuild a downstream MCP session:
 
-Example update commands:
+- external and downstream MCP session IDs,
+- the sanitized MCP initialize message,
+- safe initialize headers,
+- protocol version metadata.
+
+It does **not** persist Authorization headers, bearer tokens, cookies, passwords, or tool arguments.
+
+The current request's Authorization header may be forwarded **in memory only** during the one recovery handshake, because DevSpace still needs to authenticate that internal initialize request.
+
+### Diagnostic state
+
+`session-guard-runtime.json` is separate from recovery state. It contains only a random guard instance ID, timestamps, and counters such as:
+
+- total HTTP and MCP requests seen,
+- initialize requests seen,
+- downstream session 404s,
+- recovery attempts / successes / failures.
+
+It intentionally does not store request bodies, tool arguments, full request URLs/query strings, authentication material, full filesystem paths, or the public tunnel URL.
+
+## Security model
+
+The original launcher safety properties remain in place:
+
+- only one explicitly selected `allowedRoot`,
+- drive roots and the Windows home directory are rejected,
+- DevSpace JSON updates are atomic,
+- configuration backups are retained,
+- rollback is attempted if a root change fails,
+- process stop/reuse requires PID + process name + expected command-line fragments,
+- DevSpace CLI location is resolved from the installed npm package metadata instead of a user-specific hard-coded path,
+- Quick Tunnel hostnames are validated,
+- local ports must be owned by the expected managed process,
+- OAuth protected-resource metadata is checked through the public path,
+- launcher operations are serialized with a mutex,
+- `DEVSPACE_TRUST_PROXY=1` is set for the local Cloudflare -> SessionGuard -> DevSpace proxy chain.
+
+SessionGuard adds these invariants:
+
+- binds to loopback only by default,
+- Cloudflare targets SessionGuard rather than DevSpace directly,
+- only known session-bound `/mcp` HTTP 404 responses are eligible for automatic recovery,
+- at most one reinitialize is in flight per external session,
+- at most one retry of the original operation,
+- ambiguous transport failures are never replayed,
+- SSE/streaming responses are passed through rather than fully buffered,
+- no global DevSpace/npm package patching,
+- no unauthenticated public diagnostics endpoint,
+- diagnostic logs use normalized URL paths and omit query strings.
+
+See [SECURITY.md](SECURITY.md) and [docs/SESSIONGUARD.md](docs/SESSIONGUARD.md) for details.
+
+## Tests
+
+Run the Node behavior suite:
 
 ```powershell
-npm update -g @waishnav/devspace
-winget upgrade --id Cloudflare.cloudflared
+node --test tests/session-guard.test.mjs
 ```
 
-After updating, run the isolated checks:
+Run the CLI/process smoke test:
+
+```powershell
+node tests/session-guard-smoke.mjs
+```
+
+Run the Windows static/isolated launcher checks:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Static.ps1
 ```
 
-## Troubleshooting
-
-### `cloudflared was not found`
-
-```powershell
-winget install --id Cloudflare.cloudflared
-```
-
-### `devspace was not found`
-
-```powershell
-npm install -g @waishnav/devspace
-```
-
-### The configured port is already in use
-
-Inspect the process ID shown in the error. If another DevSpace instance was started manually, stop it first.
-
-```powershell
-Get-NetTCPConnection -LocalPort 7676 -State Listen
-```
-
-### The Quick Tunnel URL could not be discovered
-
-Check:
-
-```text
-%USERPROFILE%\.devspace\runtime\cloudflared.err.log
-```
-
-Possible causes include a temporary Cloudflare outage, network restrictions, or security software blocking `cloudflared`.
-
-### The public connectivity check failed
-
-Inspect `devspace.err.log` and `cloudflared.err.log`. If tunnel propagation is slow on your network, increase `HttpTimeoutSeconds` in `launcher.settings.json`.
-
-### A root change failed
-
-The launcher attempts to restore the most recent pre-change configuration and restart the previous setup. Backups are stored under:
-
-```text
-%USERPROFILE%\.devspace\backups
-```
+The behavior suite covers recovery across simulated DevSpace restarts, persisted mapping reload, single-flight concurrent 404 handling, no retry on 401/403/500 or connection reset, diagnostic counters, secret non-persistence, query-string redaction, and SSE streaming.
 
 ## Known limitations
 
-- Windows only
-- Cloudflare Quick Tunnel provides a temporary URL and no fixed-URL or availability guarantee
-- The ChatGPT MCP URL must be updated manually after Windows restarts or the tunnel is recreated
-- The launcher deliberately does not automate ChatGPT's settings UI
-- Compatibility cannot be guaranteed against every future breaking change in DevSpace or Cloudflare Tunnel
-- A full live test stops and recreates the active DevSpace connection; use the static test while an important session is in progress
-
-## Security
-
-Follow [SECURITY.md](SECURITY.md) when reporting a vulnerability. Do not publish secrets, private repository names, personal filesystem paths, active access tokens, or active MCP URLs in a public issue.
-
-A Quick Tunnel URL is not a private key, but it should not be shared unnecessarily. Keep DevSpace authentication and authorization enabled, and keep `allowedRoots` restricted to the smallest required folder.
+- Cloudflare Quick Tunnel URLs are temporary. If the tunnel process is recreated, the public hostname can change.
+- SessionGuard can recover only sessions that were initialized through it and for which a sanitized initialize template was captured.
+- SessionGuard cannot repair a ChatGPT-side tool/capability binding failure that occurs before the request reaches the local endpoint.
+- The first upgrade from the old direct-tunnel layout requires one tunnel recreation and therefore one ChatGPT MCP URL update.
+- This project does not automate the ChatGPT UI or store ChatGPT credentials.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

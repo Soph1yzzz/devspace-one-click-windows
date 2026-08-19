@@ -11,6 +11,7 @@ function Get-LauncherSettings {
 
     $settings = [ordered]@{
         Port = 7676
+        BridgePort = 7677
         StartupTimeoutSeconds = 30
         HttpTimeoutSeconds = 20
         BackupRetention = 10
@@ -28,12 +29,19 @@ function Get-LauncherSettings {
     }
 
     $settings.Port = [int]$settings.Port
+    $settings.BridgePort = [int]$settings.BridgePort
     $settings.StartupTimeoutSeconds = [int]$settings.StartupTimeoutSeconds
     $settings.HttpTimeoutSeconds = [int]$settings.HttpTimeoutSeconds
     $settings.BackupRetention = [int]$settings.BackupRetention
 
     if ($settings.Port -lt 1 -or $settings.Port -gt 65535) {
         throw "Port must be between 1 and 65535."
+    }
+    if ($settings.BridgePort -lt 1 -or $settings.BridgePort -gt 65535) {
+        throw "BridgePort must be between 1 and 65535."
+    }
+    if ($settings.BridgePort -eq $settings.Port) {
+        throw "BridgePort must be different from Port."
     }
     if ($settings.StartupTimeoutSeconds -lt 5) {
         throw "StartupTimeoutSeconds must be at least 5."
@@ -55,12 +63,74 @@ function Get-LauncherPaths {
         BackupDir = Join-Path $HOME ".devspace\backups"
         RuntimeDir = $runtimeDir
         TunnelPidFile = Join-Path $runtimeDir "cloudflared.pid"
+        SessionGuardPidFile = Join-Path $runtimeDir "session-guard.pid"
         DevSpacePidFile = Join-Path $runtimeDir "devspace.pid"
         PublicUrlFile = Join-Path $runtimeDir "public-url.txt"
         TunnelOut = Join-Path $runtimeDir "cloudflared.out.log"
         TunnelErr = Join-Path $runtimeDir "cloudflared.err.log"
+        SessionGuardOut = Join-Path $runtimeDir "session-guard.out.log"
+        SessionGuardErr = Join-Path $runtimeDir "session-guard.err.log"
+        SessionGuardState = Join-Path $runtimeDir "session-guard-state.json"
+        SessionGuardRuntime = Join-Path $runtimeDir "session-guard-runtime.json"
         DevSpaceOut = Join-Path $runtimeDir "devspace.out.log"
         DevSpaceErr = Join-Path $runtimeDir "devspace.err.log"
+    }
+}
+
+function Get-SessionGuardRuntimeState {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $parsed = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+        if ($null -eq $parsed -or $parsed.schemaVersion -ne 1) {
+            return $null
+        }
+
+        $countersProperty = $parsed.PSObject.Properties["counters"]
+        if ($null -eq $countersProperty -or $null -eq $countersProperty.Value) {
+            return $null
+        }
+        $counters = $countersProperty.Value
+
+        function Read-Counter {
+            param([object]$Object, [string]$Name)
+            $property = $Object.PSObject.Properties[$Name]
+            if ($null -eq $property -or $null -eq $property.Value) { return [long]0 }
+            try { return [long]$property.Value } catch { return [long]0 }
+        }
+
+        function Read-OptionalString {
+            param([object]$Object, [string]$Name)
+            $property = $Object.PSObject.Properties[$Name]
+            if ($null -eq $property -or $null -eq $property.Value) { return $null }
+            $value = [string]$property.Value
+            if ([string]::IsNullOrWhiteSpace($value)) { return $null }
+            return $value
+        }
+
+        return [pscustomobject]@{
+            GuardInstanceId = Read-OptionalString -Object $parsed -Name "guardInstanceId"
+            StartedAt = Read-OptionalString -Object $parsed -Name "startedAt"
+            LastInboundAt = Read-OptionalString -Object $parsed -Name "lastInboundAt"
+            LastMcpAt = Read-OptionalString -Object $parsed -Name "lastMcpAt"
+            LastInitializeAt = Read-OptionalString -Object $parsed -Name "lastInitializeAt"
+            LastRecoveryStartedAt = Read-OptionalString -Object $parsed -Name "lastRecoveryStartedAt"
+            LastRecoverySucceededAt = Read-OptionalString -Object $parsed -Name "lastRecoverySucceededAt"
+            LastDownstream404At = Read-OptionalString -Object $parsed -Name "lastDownstream404At"
+            HttpRequests = Read-Counter -Object $counters -Name "httpRequests"
+            McpRequests = Read-Counter -Object $counters -Name "mcpRequests"
+            InitializeRequests = Read-Counter -Object $counters -Name "initializeRequests"
+            Downstream404 = Read-Counter -Object $counters -Name "downstream404"
+            RecoveriesStarted = Read-Counter -Object $counters -Name "recoveriesStarted"
+            RecoveriesSucceeded = Read-Counter -Object $counters -Name "recoveriesSucceeded"
+            RecoveriesFailed = Read-Counter -Object $counters -Name "recoveriesFailed"
+        }
+    } catch {
+        return $null
     }
 }
 
